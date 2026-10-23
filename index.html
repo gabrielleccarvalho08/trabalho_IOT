@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Display 7 segmentos · ESP32</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #e9e7e1;
+    --panel: #f6f4ef;
+    --ink: #1d1f23;
+    --muted: #6b6f76;
+    --line: #cfccc3;
+    --seg-on: #d9261c;
+    --seg-off: #dedbd3;
+    --glass: #d4d1c8;
+    --ok: #1f8a4c;
+    --bad: #b3261e;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121417;
+      --panel: #1a1d21;
+      --ink: #eceae4;
+      --muted: #8d9198;
+      --line: #2c3036;
+      --seg-on: #ffb020;
+      --seg-off: #262a30;
+      --glass: #0e1013;
+      --ok: #4cc47f;
+      --bad: #ff7a70;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121417; --panel: #1a1d21; --ink: #eceae4; --muted: #8d9198; --line: #2c3036;
+    --seg-on: #ffb020; --seg-off: #262a30; --glass: #0e1013; --ok: #4cc47f; --bad: #ff7a70;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 32px 20px 48px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  h1 { font-size: clamp(26px, 4vw, 40px); font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+  header p { margin: 4px 0 0; color: var(--muted); max-width: 52ch; }
+
+  .status { display: inline-flex; align-items: center; gap: 10px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .status[data-state="online"] .dot { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .status[data-state="offline"] .dot,
+  .status[data-state="erro"] .dot { background: var(--bad); }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
+
+  .display-wrap { background: var(--glass); border-radius: 10px; padding: 28px 24px; display: flex; justify-content: center; gap: clamp(16px, 5vw, 36px); }
+  .digit { width: clamp(70px, 18vw, 120px); height: auto; }
+  .digit polygon { fill: var(--seg-off); transition: fill .12s; }
+  .digit polygon.on { fill: var(--seg-on); }
+  .digit.stale polygon.on { fill: var(--seg-off); }
+
+  .readout { display: flex; justify-content: space-between; align-items: baseline; margin-top: 18px; }
+  .readout .num { font-size: 44px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .readout .sub { color: var(--muted); }
+
+  h2 { font-size: 16px; font-weight: 600; margin: 0 0 14px; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 10px 16px; font-size: 14px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; text-align: right; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+
+  .history { margin-top: 20px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; }
+  .chip { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-variant-numeric: tabular-nums; }
+  .chip:first-child { border-color: var(--seg-on); }
+  .empty { color: var(--muted); font-size: 14px; }
+
+  .log { margin-top: 20px; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--muted); white-space: pre-wrap; max-height: 120px; overflow: auto; }
+  button { font: inherit; font-weight: 600; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  :focus-visible { outline: 2px solid var(--seg-on); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Display do ESP32</h1>
+      <p>Mostra em tempo real o número que o ESP32 exibe nos dois displays de 7 segmentos, recebido por MQTT.</p>
+    </div>
+    <div class="status" id="status" data-state="conectando" role="status" aria-live="polite">
+      <span class="dot"></span><span id="statusTxt">Conectando ao broker…</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="panel" aria-label="Display">
+      <div class="display-wrap" id="display" aria-hidden="true"></div>
+      <div class="readout">
+        <span class="num" id="numero" aria-live="polite">--</span>
+        <span class="sub" id="ultima">Aguardando dados do ESP…</span>
+      </div>
+      <div class="history">
+        <h2>Últimos valores</h2>
+        <div class="chips" id="chips"><span class="empty">Nada recebido ainda.</span></div>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="Detalhes">
+      <h2>Detalhes da conexão</h2>
+      <dl>
+        <dt>ESP32</dt><dd id="espStatus">desconhecido</dd>
+        <dt>Sinal WiFi</dt><dd id="rssi">--</dd>
+        <dt>Ligado há</dt><dd id="uptime">--</dd>
+        <dt>Broker</dt><dd id="brokerTxt"></dd>
+        <dt>Tópico</dt><dd id="topicTxt"></dd>
+      </dl>
+      <div class="log" id="log"></div>
+      <p><button id="tema" type="button">Alternar tema</button></p>
+    </aside>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+// ======== CONFIGURAÇÃO (deve bater com o main.ino) ========
+const BROKER_WS = "wss://broker.hivemq.com:8884/mqtt";
+const PREFIXO   = "ana-b-d7";                   // mesmo prefixo do firmware
+const TOPICO_ESTADO = PREFIXO + "/display7/estado";
+const TOPICO_ONLINE = PREFIXO + "/display7/online";
+const TIMEOUT_SEM_DADOS_MS = 5000;              // considera o ESP parado após esse tempo sem mensagens
+// ===========================================================
+
+// Segmentos: bit0=a ... bit6=g
+const DIGITOS = [0b0111111,0b0000110,0b1011011,0b1001111,0b1100110,0b1101101,0b1111101,0b0000111,0b1111111,0b1101111];
+const POLIGONOS = {
+  a: "8,4 12,0 48,0 52,4 48,8 12,8",
+  b: "56,5 60,9 60,45 56,49 52,45 52,9",
+  c: "56,55 60,59 60,95 56,99 52,95 52,59",
+  d: "8,100 12,96 48,96 52,100 48,104 12,104",
+  e: "4,55 8,59 8,95 4,99 0,95 0,59",
+  f: "4,5 8,9 8,45 4,49 0,45 0,9",
+  g: "8,52 12,48 48,48 52,52 48,56 12,56"
+};
+const ORDEM = ["a","b","c","d","e","f","g"];
+
+const $ = id => document.getElementById(id);
+const displayEl = $("display");
+
+// Monta os dois dígitos (dezena, unidade) em SVG
+const digitos = [0,1].map(() => {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 60 104");
+  svg.setAttribute("class", "digit");
+  const polys = ORDEM.map(s => {
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    p.setAttribute("points", POLIGONOS[s]);
+    svg.appendChild(p);
+    return p;
+  });
+  displayEl.appendChild(svg);
+  return { svg, polys };
+});
+
+function desenharDigito(i, d) {
+  const mascara = d == null ? 0 : DIGITOS[d];
+  digitos[i].polys.forEach((p, bit) => p.classList.toggle("on", !!((mascara >> bit) & 1)));
+}
+function desenhar(valor) {
+  if (valor == null) { desenharDigito(0, null); desenharDigito(1, null); return; }
+  desenharDigito(0, Math.floor(valor / 10));
+  desenharDigito(1, valor % 10);
+}
+function marcarParado(parado) {
+  digitos.forEach(d => d.svg.classList.toggle("stale", parado));
+}
+
+function setStatus(estado, texto) {
+  $("status").dataset.state = estado;
+  $("statusTxt").textContent = texto;
+}
+function log(msg) {
+  const el = $("log");
+  const hora = new Date().toLocaleTimeString("pt-BR");
+  el.textContent = (hora + "  " + msg + "\n" + el.textContent).slice(0, 1200);
+}
+function formatarTempo(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), seg = s % 60;
+  return (h ? h + "h " : "") + (h || m ? m + "min " : "") + seg + "s";
+}
+
+$("brokerTxt").textContent = BROKER_WS.replace("wss://", "").replace("/mqtt", "");
+$("topicTxt").textContent = TOPICO_ESTADO;
+desenhar(null);
+
+const historico = [];
+let ultimoRecebido = 0;
+let brokerConectado = false;
+let brokerConectadoEm = 0;
+
+function registrar(valor) {
+  historico.unshift(valor);
+  if (historico.length > 12) historico.pop();
+  $("chips").innerHTML = historico.map(v => `<span class="chip">${String(v).padStart(2, "0")}</span>`).join("");
+}
+
+function aoReceberEstado(texto) {
+  let dados;
+  try { dados = JSON.parse(texto); }
+  catch { const n = parseInt(texto, 10); dados = isNaN(n) ? null : { valor: n }; }
+  if (!dados || typeof dados.valor !== "number") { log("Mensagem ignorada: " + texto); return; }
+
+  ultimoRecebido = Date.now();
+  $("espStatus").textContent = "online";
+  marcarParado(false);
+  desenhar(dados.valor);
+  $("numero").textContent = String(dados.valor).padStart(2, "0");
+  $("ultima").textContent = "Atualizado às " + new Date().toLocaleTimeString("pt-BR");
+  if (typeof dados.rssi === "number") $("rssi").textContent = dados.rssi + " dBm";
+  if (typeof dados.uptime === "number") $("uptime").textContent = formatarTempo(dados.uptime);
+  registrar(dados.valor);
+}
+
+// Se o ESP parar de enviar, apaga o display no site para não mostrar valor velho
+setInterval(() => {
+  const referencia = ultimoRecebido || (brokerConectado ? brokerConectadoEm : 0);
+  if (referencia && Date.now() - referencia > TIMEOUT_SEM_DADOS_MS) {
+    marcarParado(true);
+    $("espStatus").textContent = "sem dados";
+    $("ultima").textContent = ultimoRecebido
+      ? "Sem dados há mais de " + Math.round(TIMEOUT_SEM_DADOS_MS / 1000) + "s"
+      : "Nenhum dado recebido do ESP32";
+  }
+}, 1000);
+
+// ---- MQTT ----
+if (typeof mqtt === "undefined") {
+  setStatus("erro", "Biblioteca MQTT não carregou");
+  log("Não foi possível baixar o mqtt.js. Verifique sua internet.");
+} else {
+  const client = mqtt.connect(BROKER_WS, {
+    clientId: "site-d7-" + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 3000,
+    connectTimeout: 8000
+  });
+
+  client.on("connect", () => {
+    brokerConectado = true;
+    brokerConectadoEm = Date.now();
+    setStatus("online", "Site conectado ao broker");
+    log("Conectado. Assinando tópicos…");
+    client.subscribe([TOPICO_ESTADO, TOPICO_ONLINE], err => {
+      if (err) log("Erro ao assinar: " + err.message);
+    });
+  });
+  client.on("reconnect", () => setStatus("conectando", "Site reconectando ao broker…"));
+  client.on("offline", () => {
+    brokerConectado = false;
+    setStatus("offline", "Site sem conexão com o broker");
+  });
+  client.on("error", e => { setStatus("erro", "Erro de conexão"); log("Erro: " + e.message); });
+
+  client.on("message", (topico, payload) => {
+    const texto = payload.toString();
+    if (topico === TOPICO_ONLINE) {
+      $("espStatus").textContent = texto === "online" ? "online" : "offline";
+      if (texto !== "online") marcarParado(true);
+      log("ESP32 " + texto);
+    } else if (topico === TOPICO_ESTADO) {
+      aoReceberEstado(texto);
+    }
+  });
+}
+
+// ---- Tema ----
+$("tema").addEventListener("click", () => {
+  const root = document.documentElement;
+  const escuroAgora = root.dataset.theme === "dark" ||
+    (!root.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  root.dataset.theme = escuroAgora ? "light" : "dark";
+});
+</script>
+</body>
+</html>
